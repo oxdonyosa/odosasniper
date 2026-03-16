@@ -5,16 +5,16 @@ import requests
 from datetime import datetime
 
 # ── CONFIG ──────────────────────────────────────────────
-BOT_TOKEN   = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-CHAT_ID     = os.environ.get("CHAT_ID",   "YOUR_CHAT_ID_HERE")
-MIN_PROFIT  = float(os.environ.get("MIN_PROFIT", "15"))   # minimum % profit to alert
-SCAN_EVERY  = int(os.environ.get("SCAN_EVERY",   "1800")) # seconds between scans (30 min)
-MAX_SIGNALS = int(os.environ.get("MAX_SIGNALS",  "5"))    # max signals per scan
+BOT_TOKEN   = os.environ.get("BOT_TOKEN",   "YOUR_BOT_TOKEN_HERE")
+CHAT_ID     = os.environ.get("CHAT_ID",     "YOUR_CHAT_ID_HERE")
+MIN_PROFIT  = float(os.environ.get("MIN_PROFIT",  "15"))
+SCAN_EVERY  = int(os.environ.get("SCAN_EVERY",    "1800"))
+MAX_SIGNALS = int(os.environ.get("MAX_SIGNALS",   "5"))
 # ────────────────────────────────────────────────────────
 
 GAMMA_URL = (
     "https://gamma-api.polymarket.com/markets"
-    "?active=true&closed=false&limit=100"
+    "?active=true&closed=false&limit=200"
     "&order=volumeNum&ascending=false"
 )
 
@@ -33,6 +33,11 @@ CATS = {
                     "inflation","gdp","recession","economy","market cap",
                     "ipo","earnings","bond","yield"],
 }
+
+# ── MEMORY: tracks what we've already sent ──────────────
+sent_signals: set = set()   # stores question+outcome keys
+scan_num = 0
+# ────────────────────────────────────────────────────────
 
 def get_category(question: str) -> str:
     t = question.lower()
@@ -62,12 +67,17 @@ def fmt_date(d: str) -> str:
     except Exception:
         return "—"
 
+def signal_key(question: str, outcome: str) -> str:
+    return f"{question.strip().lower()}|{outcome.strip().lower()}"
+
 def fetch_signals() -> list[dict]:
     resp = requests.get(GAMMA_URL, timeout=15)
     resp.raise_for_status()
     markets = resp.json()
 
-    signals = []
+    # Group by category so we pick diverse signals
+    by_cat: dict[str, list] = {}
+
     for m in markets:
         if not all(k in m for k in ("question", "outcomePrices", "outcomes")):
             continue
@@ -80,25 +90,41 @@ def fetch_signals() -> list[dict]:
         if not isinstance(prices, list) or len(prices) < 2:
             continue
 
-        best_bid  = float(m.get("bestBid")  or 0) or None
-        best_ask  = float(m.get("bestAsk")  or 0) or None
-        spread    = float(m.get("spread")   or 0) or None
-        last_trade= float(m.get("lastTradePrice") or 0) or None
+        best_bid   = float(m.get("bestBid")        or 0) or None
+        best_ask   = float(m.get("bestAsk")        or 0) or None
+        spread     = float(m.get("spread")         or 0) or None
+        last_trade = float(m.get("lastTradePrice") or 0) or None
+        volume     = m.get("volumeNum")  or 0
+        liquidity  = m.get("liquidityNum") or 0
+
+        # Skip very low liquidity markets — low quality signals
+        if volume < 500:
+            continue
 
         for i, raw_price in enumerate(prices):
             gp = float(raw_price)
             if gp <= 0.03 or gp >= 0.94:
                 continue
 
-            fill = best_ask if (best_ask and 0.03 < best_ask < 0.97) else gp
+            fill   = best_ask if (best_ask and 0.03 < best_ask < 0.97) else gp
             profit = round((1 / fill - 1) * 100, 1)
             if profit < MIN_PROFIT:
                 continue
 
+            outcome = outcomes[i] if i < len(outcomes) else "YES"
+            key     = signal_key(m["question"], outcome)
+
+            # Skip if already sent this exact signal before
+            if key in sent_signals:
+                continue
+
             edge = round(gp - best_ask, 4) if best_ask else None
-            signals.append({
+            cat  = get_category(m["question"])
+
+            sig = {
+                "key":        key,
                 "question":   m["question"],
-                "outcome":    outcomes[i] if i < len(outcomes) else "YES",
+                "outcome":    outcome,
                 "gamma_price":gp,
                 "gamma_pct":  round((1 / gp - 1) * 100, 1),
                 "fill_price": fill,
@@ -109,17 +135,37 @@ def fetch_signals() -> list[dict]:
                 "last_trade": last_trade,
                 "has_clob":   bool(best_ask and best_bid),
                 "edge":       edge,
-                "category":   get_category(m["question"]),
-                "volume":     m.get("volumeNum") or 0,
-                "liquidity":  m.get("liquidityNum") or 0,
+                "category":   cat,
+                "volume":     volume,
+                "liquidity":  liquidity,
                 "end_date":   m.get("endDate", ""),
                 "slug":       m.get("slug", ""),
-            })
+            }
 
-    signals.sort(key=lambda x: x["profit"], reverse=True)
-    return signals[:MAX_SIGNALS]
+            if cat not in by_cat:
+                by_cat[cat] = []
+            by_cat[cat].append(sig)
 
-def build_message(signals: list[dict], scan_num: int) -> str:
+    # Sort each category by profit descending
+    for cat in by_cat:
+        by_cat[cat].sort(key=lambda x: x["profit"], reverse=True)
+
+    # Pick diverse signals — rotate across categories
+    final = []
+    cats  = list(by_cat.keys())
+    idx   = 0
+    while len(final) < MAX_SIGNALS and any(by_cat[c] for c in cats):
+        cat = cats[idx % len(cats)]
+        if by_cat.get(cat):
+            final.append(by_cat[cat].pop(0))
+        idx += 1
+
+    # Sort final list by profit
+    final.sort(key=lambda x: x["profit"], reverse=True)
+    return final
+
+def build_message(signals: list[dict]) -> str:
+    global scan_num
     now = datetime.now().strftime("%b %d · %H:%M")
     lines = [
         f"🎯 *Polymarket Sniper Bot*",
@@ -135,7 +181,7 @@ def build_message(signals: list[dict], scan_num: int) -> str:
             if s["edge"] > 0.005:
                 edge_tag = f"  ┗ Edge vs gamma: `+{s['edge']}`"
             elif s["edge"] < -0.005:
-                edge_tag = f"  ┗ Slippage vs gamma: `{s['edge']}`"
+                edge_tag = f"  ┗ Slippage: `{s['edge']}`"
 
         lines += [
             f"",
@@ -168,7 +214,7 @@ def build_message(signals: list[dict], scan_num: int) -> str:
     return "\n".join(lines)
 
 def send_telegram(text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url     = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    CHAT_ID,
         "text":       text,
@@ -180,31 +226,47 @@ def send_telegram(text: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Message sent ✓")
 
 def main():
+    global scan_num, sent_signals
     print("=" * 50)
     print("  Polymarket Sniper Bot — starting up")
     print(f"  Min profit : +{MIN_PROFIT}%")
     print(f"  Scan every : {SCAN_EVERY // 60} minutes")
     print(f"  Max signals: {MAX_SIGNALS}")
+    print("  Deduplication: ON")
+    print("  Category diversity: ON")
     print("=" * 50)
 
-    scan_num = 1
+    # Clear memory every 24 hours so old signals can resurface if still valid
+    last_reset = time.time()
+
     while True:
+        scan_num += 1
+
+        # Reset seen signals every 24 hours
+        if time.time() - last_reset > 86400:
+            sent_signals.clear()
+            last_reset = time.time()
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Memory reset — fresh slate")
+
         try:
             print(f"\n[Scan #{scan_num}] Fetching markets...")
             signals = fetch_signals()
-            print(f"[Scan #{scan_num}] Found {len(signals)} signals above +{MIN_PROFIT}%")
+            print(f"[Scan #{scan_num}] Found {len(signals)} new distinct signals")
 
             if signals:
-                msg = build_message(signals, scan_num)
+                msg = build_message(signals)
                 send_telegram(msg)
+                # Mark these signals as sent so they don't repeat
+                for s in signals:
+                    sent_signals.add(s["key"])
+                print(f"[Scan #{scan_num}] Memory now holds {len(sent_signals)} seen signals")
             else:
-                print(f"[Scan #{scan_num}] No signals — skipping message")
+                print(f"[Scan #{scan_num}] No new signals — skipping message")
 
         except Exception as e:
             print(f"[ERROR] {e}")
 
-        scan_num += 1
-        print(f"Sleeping {SCAN_EVERY // 60} min until next scan...")
+        print(f"Sleeping {SCAN_EVERY // 60} min...")
         time.sleep(SCAN_EVERY)
 
 if __name__ == "__main__":
