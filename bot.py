@@ -13,9 +13,9 @@ MAX_SIGNALS    = int(os.environ.get("MAX_SIGNALS","5"))
 # ── CONVICTION FILTER SETTINGS ───────────────────────────
 MIN_PRICE      = 0.70   # outcome must be 70c+ (70%+ probability)
 MAX_PRICE      = 0.97   # avoid 97c+ (too little edge left)
-MAX_HOURS      = 48     # must resolve within 48 hours
-MIN_VOLUME     = 5000   # minimum $5k volume
-MIN_PROFIT_PCT = 14.0   # minimum profit %
+MAX_HOURS      = 72     # must resolve within 72 hours
+MIN_VOLUME     = 3000   # minimum $3k volume
+MIN_PROFIT_PCT = 10.0   # minimum profit %
 # ────────────────────────────────────────────────────────
 
 GAMMA_URL = (
@@ -28,7 +28,7 @@ CATS = {
     "🏛 POLITICS": ["trump","biden","election","president","senate","congress",
                     "vote","democrat","republican","governor","ayatollah",
                     "khamenei","ukraine","russia","nato","tariff","executive",
-                    "supreme","minister","parliament","iran","elon"],
+                    "supreme","minister","parliament","oil","iran","elon","isreal"],
     "🪙 CRYPTO":   ["bitcoin","btc","ethereum","eth","crypto","solana","sol",
                     "xrp","ripple","coinbase","binance","altcoin","defi",
                     "nft","blockchain","token"],
