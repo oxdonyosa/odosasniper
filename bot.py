@@ -13,14 +13,14 @@ MAX_SIGNALS    = int(os.environ.get("MAX_SIGNALS","5"))
 # ── CONVICTION FILTER SETTINGS ───────────────────────────
 MIN_PRICE      = 0.70   # outcome must be 70c+ (70%+ probability)
 MAX_PRICE      = 0.97   # avoid 97c+ (too little edge left)
-MAX_HOURS      = 72     # must resolve within 72 hours
+MAX_HOURS      = 720    # 30 days — wide net, expiry shown as info only
 MIN_VOLUME     = 3000   # minimum $3k volume
 MIN_PROFIT_PCT = 10.0   # minimum profit %
 # ────────────────────────────────────────────────────────
 
 GAMMA_URL = (
     "https://gamma-api.polymarket.com/markets"
-    "?active=true&closed=false&limit=200"
+    "?active=true&closed=false&limit=500"
     "&order=volumeNum&ascending=false"
 )
 
@@ -28,7 +28,7 @@ CATS = {
     "🏛 POLITICS": ["trump","biden","election","president","senate","congress",
                     "vote","democrat","republican","governor","ayatollah",
                     "khamenei","ukraine","russia","nato","tariff","executive",
-                    "supreme","minister","parliament","oil","iran","elon","isreal"],
+                    "supreme","minister","parliament"],
     "🪙 CRYPTO":   ["bitcoin","btc","ethereum","eth","crypto","solana","sol",
                     "xrp","ripple","coinbase","binance","altcoin","defi",
                     "nft","blockchain","token"],
@@ -88,6 +88,7 @@ def fetch_signals() -> list:
     markets = resp.json()
 
     signals = []
+    skipped_volume = skipped_price = skipped_profit = skipped_expiry = 0
     for m in markets:
         if not all(k in m for k in ("question", "outcomePrices", "outcomes")):
             continue
@@ -102,6 +103,7 @@ def fetch_signals() -> list:
         volume    = float(m.get("volumeNum")    or 0)
         liquidity = float(m.get("liquidityNum") or 0)
         if volume < MIN_VOLUME:
+            skipped_volume += 1
             continue
 
         best_bid   = float(m.get("bestBid")        or 0) or None
@@ -111,7 +113,9 @@ def fetch_signals() -> list:
         end_date   = m.get("endDate", "")
         hrs        = hours_left(end_date)
 
-        if hrs is None or hrs > MAX_HOURS or hrs <= 0:
+        # Only skip if we KNOW it expires beyond MAX_HOURS
+        # If hrs is None (no endDate) — let it through
+        if hrs is not None and (hrs > MAX_HOURS or hrs <= 0):
             continue
 
         for i, raw_price in enumerate(prices):
@@ -154,6 +158,7 @@ def fetch_signals() -> list:
                 "score":       score,
             })
 
+    print(f"[DEBUG] Skipped by volume: {skipped_volume} | Passed price+profit filter: {len(signals)}")
     signals.sort(key=lambda x: x["score"], reverse=True)
     return signals[:MAX_SIGNALS]
 
