@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 # ── CONFIG ────────────────────────────────────────────
 BOT_TOKEN  = os.environ.get("BOT_TOKEN",  "YOUR_BOT_TOKEN_HERE")
 CHAT_ID    = os.environ.get("CHAT_ID",    "YOUR_CHAT_ID_HERE")
-SCAN_EVERY = int(os.environ.get("SCAN_EVERY", "43200"))  # every 12 hours
-MAX_DAILY  = int(os.environ.get("MAX_DAILY", "2"))        # max signals per day
+SCAN_EVERY    = int(os.environ.get("SCAN_EVERY",    "43200"))  # every 12 hours
+MAX_PER_SCAN  = int(os.environ.get("MAX_PER_SCAN",  "5"))      # max signals per scan
 
 # ── STRICT HIGH PROBABILITY FILTERS ──────────────────
 MIN_PRICE    = 0.80   # must be priced 80c or higher (80%+ probability)
@@ -26,8 +26,6 @@ GAMMA_URL = (
 )
 
 sent_signals  = set()
-daily_count   = 0
-last_day      = None
 scan_num      = 0
 
 # ── HELPERS ───────────────────────────────────────────
@@ -61,12 +59,7 @@ def probability_bar(price):
     n = max(0, min(10, int(round(price * 10))))
     return f"[{'#'*n}{'-'*(10-n)}] {round(price*100)}%"
 
-def get_today():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-# ── FETCH SIGNALS ─────────────────────────────────────
-
-def fetch_signals():
+# ── FETCH SIGNALS ─────────────────────────────────────def fetch_signals():
     resp = requests.get(GAMMA_URL, timeout=20)
     resp.raise_for_status()
     markets = resp.json()
@@ -193,14 +186,14 @@ def fetch_signals():
 
 # ── BUILD MESSAGE ─────────────────────────────────────
 
-def build_message(s, rank, total_today):
+def build_message(s, rank):
     hrs     = s["hrs_left"]
     profit  = s["profit"]
     implied = round(s["entry"] * 100)
 
     lines = [
         f"*Polymarket Conviction Play*",
-        f"Signal {rank} of {MAX_DAILY} today",
+        f"Signal {rank} of {MAX_PER_SCAN} this scan",
         f"",
         f"*{safe_text(s['question'])}*",
         f"",
@@ -242,7 +235,7 @@ def send_telegram(text):
 # ── MAIN LOOP ─────────────────────────────────────────
 
 def main():
-    global scan_num, daily_count, last_day, sent_signals
+    global scan_num, sent_signals
 
     print("=" * 55)
     print("  Polymarket Conviction Sniper — High Prob Mode")
@@ -250,7 +243,7 @@ def main():
     print(f"  Min volume      : ${MIN_VOLUME:,}")
     print(f"  Min liquidity   : ${MIN_LIQUIDITY:,}")
     print(f"  Max expiry      : {MAX_DAYS} days")
-    print(f"  Max signals/day : {MAX_DAILY}")
+    print(f"  Max per scan    : {MAX_PER_SCAN}")
     print(f"  Scan every      : {SCAN_EVERY//3600:.0f} hours")
     print("=" * 55)
 
@@ -258,13 +251,6 @@ def main():
 
     while True:
         scan_num += 1
-        today = get_today()
-
-        # Reset daily counter on new day
-        if last_day != today:
-            daily_count = 0
-            last_day    = today
-            print(f"  [INFO] New day — daily counter reset")
 
         # Reset full memory weekly
         if time.time() - mem_reset > 604800:
@@ -272,30 +258,22 @@ def main():
             mem_reset = time.time()
             print(f"  [INFO] Weekly memory reset")
 
-        if daily_count >= MAX_DAILY:
-            print(f"[Scan #{scan_num}] Daily limit reached ({MAX_DAILY}) — sleeping until next scan")
-            time.sleep(SCAN_EVERY)
-            continue
-
         try:
-            print(f"\n[Scan #{scan_num}] Scanning... ({daily_count}/{MAX_DAILY} sent today)")
+            print(f"\n[Scan #{scan_num}] Scanning...")
             candidates = fetch_signals()
-
-            slots_left = MAX_DAILY - daily_count
-            top        = candidates[:slots_left]
+            top        = candidates[:MAX_PER_SCAN]
 
             if top:
-                for s in top:
-                    daily_count += 1
-                    msg = build_message(s, daily_count, MAX_DAILY)
+                for rank, s in enumerate(top, 1):
+                    msg = build_message(s, rank)
                     send_telegram(msg)
                     sent_signals.add(s["key"])
-                    print(f"  [OK] Signal {daily_count}/{MAX_DAILY} sent: {s['question'][:50]}")
+                    print(f"  [OK] Signal {rank}/{MAX_PER_SCAN}: {s['question'][:50]}")
                     print(f"       Entry={round(s['entry']*100)}c Profit=+{s['profit']}% Conv={s['conviction']}")
-                    if len(top) > 1:
+                    if rank < len(top):
                         time.sleep(2)
             else:
-                print(f"[Scan #{scan_num}] No signals passed filters today")
+                print(f"[Scan #{scan_num}] No signals passed filters")
 
         except Exception as e:
             print(f"[ERROR] {e}")
