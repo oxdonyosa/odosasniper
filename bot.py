@@ -36,7 +36,7 @@ CATS = {
     "CRYPTO":   ["bitcoin","btc","ethereum","eth","crypto","solana","sol",
                  "xrp","ripple","coinbase","binance","altcoin","defi",
                  "nft","blockchain","token","reach $","above $","below $",
-                 "hit $","higher than","lower than","price"],
+                 "hit $","higher than","lower than","price","up","down"],
     "SPORTS":   ["nba","nfl","mlb","nhl","ufc","tennis","golf","soccer",
                  "super bowl","championship","playoff","world cup",
                  "match","league","fight"],
