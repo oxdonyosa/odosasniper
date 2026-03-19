@@ -3,7 +3,7 @@
 
 ---
 
-Built for one thing — finding the highest conviction plays on Polymarket and sending them straight to Telegram. Not chasing moonshots. Not spamming signals. Just clean, filtered, high-probability trades you can compound into consistent growth.
+Built for finding the highest conviction plays on Polymarket and sending them straight to Telegram. Not chasing moonshots. Not spamming signals. Just clean, filtered, high-probability trades you can compound into consistent growth.
 
 ---
 
